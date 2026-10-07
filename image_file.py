@@ -12,8 +12,9 @@ from rle_codec import CodecError, decode, decode_with_trace, encode, encode_with
 
 IMAGE_MAGIC = b"BIMG"
 RLE_MAGIC = b"RLE1"
-HEADER = struct.Struct(">4sII")
+FILE_HEADER = struct.Struct(">4sII")
 MAX_PIXELS = 100_000_000
+MAX_EDITOR_SIDE = 256
 
 
 def _check_dimensions(width: int, height: int) -> None:
@@ -27,18 +28,24 @@ def save_image(path: str | Path, width: int, height: int, pixels: bytes) -> None
     _check_dimensions(width, height)
     if len(pixels) != width * height:
         raise CodecError("Pixel count does not match image dimensions")
-    Path(path).write_bytes(HEADER.pack(IMAGE_MAGIC, width, height) + pixels)
+    Path(path).write_bytes(FILE_HEADER.pack(IMAGE_MAGIC, width, height) + pixels)
 
 
-def load_image(path: str | Path) -> tuple[int, int, bytes]:
+def load_image(
+    path: str | Path, max_side: int | None = None
+) -> tuple[int, int, bytes]:
     data = Path(path).read_bytes()
-    if len(data) < HEADER.size:
+    if len(data) < FILE_HEADER.size:
         raise CodecError("Image file is too short")
-    magic, width, height = HEADER.unpack_from(data)
+    magic, width, height = FILE_HEADER.unpack_from(data)
     if magic != IMAGE_MAGIC:
         raise CodecError("Not a BIMG binary image file")
     _check_dimensions(width, height)
-    pixels = data[HEADER.size :]
+    if max_side is not None and max(width, height) > max_side:
+        raise CodecError(
+            f"This image is {width} × {height}; the editor limit is {max_side} pixels per side"
+        )
+    pixels = data[FILE_HEADER.size :]
     if len(pixels) != width * height:
         raise CodecError("Image file pixel count does not match its dimensions")
     if any(pixel not in (0, 255) for pixel in pixels):
@@ -51,43 +58,53 @@ def save_compressed(path: str | Path, width: int, height: int, pixels: bytes) ->
     if len(pixels) != width * height:
         raise CodecError("Pixel count does not match image dimensions")
     body = encode(pixels)
-    Path(path).write_bytes(HEADER.pack(RLE_MAGIC, width, height) + body)
+    Path(path).write_bytes(FILE_HEADER.pack(RLE_MAGIC, width, height) + body)
 
 
 def save_compressed_with_trace(
     path: str | Path, width: int, height: int, pixels: bytes
-) -> list[str]:
+) -> tuple[bytes, list[str]]:
     _check_dimensions(width, height)
     if len(pixels) != width * height:
         raise CodecError("Pixel count does not match image dimensions")
     body, trace = encode_with_trace(pixels)
-    Path(path).write_bytes(HEADER.pack(RLE_MAGIC, width, height) + body)
-    return trace
+    Path(path).write_bytes(FILE_HEADER.pack(RLE_MAGIC, width, height) + body)
+    return body, trace
 
 
-def load_compressed(path: str | Path) -> tuple[int, int, bytes]:
+def load_compressed(
+    path: str | Path, max_side: int | None = None
+) -> tuple[int, int, bytes]:
     data = Path(path).read_bytes()
-    if len(data) < HEADER.size:
+    if len(data) < FILE_HEADER.size:
         raise CodecError("Compressed file is too short")
-    magic, width, height = HEADER.unpack_from(data)
+    magic, width, height = FILE_HEADER.unpack_from(data)
     if magic != RLE_MAGIC:
         raise CodecError("Not an RLE1 compressed image")
     _check_dimensions(width, height)
-    pixels = decode(data[HEADER.size :], width * height)
+    if max_side is not None and max(width, height) > max_side:
+        raise CodecError(
+            f"This image is {width} × {height}; the editor limit is {max_side} pixels per side"
+        )
+    pixels = decode(data[FILE_HEADER.size :], width * height)
     return width, height, pixels
 
 
 def load_compressed_with_trace(
-    path: str | Path,
+    path: str | Path, max_side: int | None = None,
 ) -> tuple[int, int, bytes, list[str]]:
     data = Path(path).read_bytes()
-    if len(data) < HEADER.size:
+    if len(data) < FILE_HEADER.size:
         raise CodecError("Compressed file is too short")
-    magic, width, height = HEADER.unpack_from(data)
+    magic, width, height = FILE_HEADER.unpack_from(data)
     if magic != RLE_MAGIC:
         raise CodecError("Not an RLE1 compressed image")
     _check_dimensions(width, height)
-    pixels, trace = decode_with_trace(data[HEADER.size :], width * height)
+    if max_side is not None and max(width, height) > max_side:
+        raise CodecError(
+            f"This image is {width} × {height}; the editor limit is {max_side} pixels per side"
+        )
+    pixels, trace = decode_with_trace(data[FILE_HEADER.size :], width * height)
     return width, height, pixels, trace
 
 
@@ -98,6 +115,11 @@ def load_png(path: str | Path) -> tuple[int, int, bytes]:
         raise CodecError("OpenCV could not read this image")
     height, width = image.shape
     _check_dimensions(width, height)
+    if max(width, height) > MAX_EDITOR_SIDE:
+        scale = MAX_EDITOR_SIDE / max(width, height)
+        new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
+        height, width = image.shape
     _, binary = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
     return width, height, binary.tobytes()
 

@@ -16,9 +16,16 @@ python3 -m pip install -r requirements.txt
 python3 main.py
 ```
 
+Sur Ubuntu/Debian, si l’import `tkinter` échoue, installez aussi le paquet
+système `python3-tk`.
+
 Cliquez ou faites glisser le bouton gauche pour peindre en noir. Le bouton droit
 peint en blanc. Les dimensions sont exprimées en pixels et limitées à 256 par
 côté dans l’interface.
+Les dimensions saisies ne deviennent actives qu’après avoir cliqué sur
+« Nouvelle image ». Les imports PNG, JPEG et BMP plus grands sont réduits pour
+tenir dans la limite de 256 pixels par côté; les fichiers `.bimg` et `.rle`
+plus grands sont refusés avec un message explicatif.
 
 Pour commencer à partir d’une image existante, ouvrez un PNG, JPEG ou BMP :
 OpenCV le convertit en niveaux de gris puis le seuillage le transforme en
@@ -29,6 +36,8 @@ image standard.
 compression avec sauvegarde affiche aussi les paquets effectivement écrits.
 « Décompresser / ouvrir » affiche chaque paquet lu, son en-tête, sa longueur et
 les pixels qu’il ajoute à l’image.
+
+Dans l’éditeur, le clic gauche peint en noir et le clic droit peint en blanc.
 
 ## Format RLE
 

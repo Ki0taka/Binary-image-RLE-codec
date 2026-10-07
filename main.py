@@ -10,6 +10,8 @@ from image_file import (
     load_compressed_with_trace,
     load_image,
     load_png,
+    MAX_EDITOR_SIDE,
+    FILE_HEADER,
     save_compressed_with_trace,
     save_image,
     save_png,
@@ -18,7 +20,7 @@ from rle_codec import CodecError, encode_with_trace
 
 CELL = 18
 MIN_SIDE = 1
-MAX_SIDE = 256
+MAX_SIDE = MAX_EDITOR_SIDE
 
 
 class BinaryImageApp(tk.Tk):
@@ -28,6 +30,8 @@ class BinaryImageApp(tk.Tk):
         self.minsize(520, 420)
         self.width_var = tk.IntVar(value=32)
         self.height_var = tk.IntVar(value=24)
+        self.img_w = 32
+        self.img_h = 24
         self.pixels = bytearray([255] * (32 * 24))
         self._build_controls()
         self._build_canvas()
@@ -74,11 +78,15 @@ class BinaryImageApp(tk.Tk):
         self.canvas.bind("<Button-3>", self._erase)
         self.canvas.bind("<B3-Motion>", self._erase)
 
-    def _dimensions(self) -> tuple[int, int]:
+    def _requested_dimensions(self) -> tuple[int, int]:
         width, height = self.width_var.get(), self.height_var.get()
         if not (MIN_SIDE <= width <= MAX_SIDE and MIN_SIDE <= height <= MAX_SIDE):
             raise ValueError(f"Dimensions must be between {MIN_SIDE} and {MAX_SIDE}")
         return width, height
+
+    def _dimensions(self) -> tuple[int, int]:
+        """Return dimensions matching the committed pixel buffer."""
+        return self.img_w, self.img_h
 
     def _draw_grid(self) -> None:
         width, height = self._dimensions()
@@ -116,15 +124,27 @@ class BinaryImageApp(tk.Tk):
 
     def new_image(self) -> None:
         try:
-            width, height = self._dimensions()
+            width, height = self._requested_dimensions()
         except (ValueError, tk.TclError) as error:
             messagebox.showerror("Dimensions invalides", str(error))
+            self.width_var.set(self.img_w)
+            self.height_var.set(self.img_h)
             return
+        self.img_w, self.img_h = width, height
         self.pixels = bytearray([255] * (width * height))
         self._draw_grid()
         self._update_status()
 
     def _install_image(self, width: int, height: int, pixels: bytes) -> None:
+        if not (MIN_SIDE <= width <= MAX_SIDE and MIN_SIDE <= height <= MAX_SIDE):
+            raise CodecError(
+                f"Image trop grande ({width} × {height}); limite : {MAX_SIDE} pixels par côté"
+            )
+        if len(pixels) != width * height:
+            raise CodecError("Pixel count does not match image dimensions")
+        if any(pixel not in (0, 255) for pixel in pixels):
+            raise CodecError("Image contains a value other than 0 or 255")
+        self.img_w, self.img_h = width, height
         self.width_var.set(width)
         self.height_var.set(height)
         self.pixels = bytearray(pixels)
@@ -140,7 +160,7 @@ class BinaryImageApp(tk.Tk):
             return
         try:
             if path.lower().endswith(".bimg"):
-                image = load_image(path)
+                image = load_image(path, max_side=MAX_SIDE)
             else:
                 image = load_png(path)
             self._install_image(*image)
@@ -154,7 +174,7 @@ class BinaryImageApp(tk.Tk):
         if not path:
             return
         try:
-            width, height, pixels, trace = load_compressed_with_trace(path)
+            width, height, pixels, trace = load_compressed_with_trace(path, max_side=MAX_SIDE)
             self._install_image(width, height, pixels)
             self._show_steps("Étapes de décompression RLE", trace)
         except (OSError, CodecError, tk.TclError) as error:
@@ -176,6 +196,9 @@ class BinaryImageApp(tk.Tk):
         if not path:
             return
         try:
+            if Path(path).suffix.lower() != ".png":
+                messagebox.showerror("Format invalide", "Le fichier exporté doit avoir l’extension .png")
+                return
             save_png(path, width, height, bytes(self.pixels))
         except (OSError, CodecError) as error:
             messagebox.showerror("Export PNG impossible", str(error))
@@ -184,10 +207,12 @@ class BinaryImageApp(tk.Tk):
         self._save(compressed=True)
 
     def show_encode_steps(self) -> None:
-        _, trace = encode_with_trace(bytes(self.pixels))
-        self._show_steps("Étapes de compression RLE", trace)
+        encoded, trace = encode_with_trace(bytes(self.pixels))
+        self._show_steps("Étapes de compression RLE", trace, encoded)
 
-    def _show_steps(self, title: str, trace: list[str]) -> None:
+    def _show_steps(
+        self, title: str, trace: list[str], encoded: bytes | None = None
+    ) -> None:
         window = tk.Toplevel(self)
         window.title(title)
         window.geometry("760x520")
@@ -198,7 +223,23 @@ class BinaryImageApp(tk.Tk):
         scrollbar.pack(side="right", fill="y")
         width, height = self._dimensions()
         text.insert("end", f"Image : {width} × {height} = {width * height} pixels\n")
-        text.insert("end", "Header packet : 16 bits = flag (1 bit) + count (15 bits).\n\n")
+        text.insert(
+            "end",
+            "Rule: runs of 3+ equal pixels use flag 1 + 15-bit count + color byte. "
+            "Other pixels are grouped in literals with flag 0 + 15-bit count + pixel bytes.\n\n",
+        )
+        if encoded is not None:
+            raw_file_size = FILE_HEADER.size + len(self.pixels)
+            compressed_file_size = FILE_HEADER.size + len(encoded)
+            preview = " ".join(f"{value:02X}" for value in encoded[:64])
+            if len(encoded) > 64:
+                preview += " …"
+            text.insert(
+                "end",
+                f"Original: {raw_file_size} bytes as .bimg; compressed: "
+                f"{compressed_file_size} bytes as .rle.\n"
+                f"Encoded packet stream ({len(encoded)} bytes; first 64): {preview}\n\n",
+            )
         text.insert("end", "\n\n".join(trace) if trace else "Aucun pixel à coder.")
         text.configure(state="disabled")
 
@@ -217,11 +258,13 @@ class BinaryImageApp(tk.Tk):
             return
         try:
             if compressed:
-                trace = save_compressed_with_trace(path, width, height, bytes(self.pixels))
+                encoded, trace = save_compressed_with_trace(path, width, height, bytes(self.pixels))
                 packed_size = Path(path).stat().st_size
-                raw_size = 12 + len(self.pixels)
-                self.status.set(f"Image compressée : {packed_size} octets (original : {raw_size} octets)")
-                self._show_steps("Étapes de compression RLE", trace)
+                raw_size = FILE_HEADER.size + len(self.pixels)
+                self.status.set(
+                    f"Fichier .rle : {packed_size} octets; fichier .bimg : {raw_size} octets"
+                )
+                self._show_steps("Étapes de compression RLE", trace, encoded)
             else:
                 save_image(path, width, height, bytes(self.pixels))
                 self._update_status()

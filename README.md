@@ -1,21 +1,34 @@
 # Codec RLE pour les images binaires
 
-Application Python avec interface graphique Tkinter permettant de dessiner une
-image composée de pixels noirs (`0x00`) et blancs (`0xFF`), de la sauvegarder,
-de l’encoder en RLE et de rouvrir une image compressée.
+Application Python avec interface graphique Tkinter et traitement d’images
+OpenCV. Elle permet de dessiner une image composée de pixels noirs (`0x00`) et
+blancs (`0xFF`), d’ouvrir ou exporter des images PNG, de sauvegarder l’image,
+de l’encoder en RLE et de rouvrir une image compressée. Une fenêtre affiche les
+étapes et les champs binaires de chaque paquet RLE.
 
 ## Lancer
 
 Python 3.10 ou supérieur est recommandé. Tkinter est généralement inclus avec
-Python. Depuis ce dossier :
+Python. Installez OpenCV et NumPy, puis lancez l’application :
 
 ```sh
+python3 -m pip install -r requirements.txt
 python3 main.py
 ```
 
 Cliquez ou faites glisser le bouton gauche pour peindre en noir. Le bouton droit
 peint en blanc. Les dimensions sont exprimées en pixels et limitées à 256 par
 côté dans l’interface.
+
+Pour commencer à partir d’une image existante, ouvrez un PNG, JPEG ou BMP :
+OpenCV le convertit en niveaux de gris puis le seuillage le transforme en
+pixels noirs ou blancs. « Exporter PNG » enregistre le dessin courant comme
+image standard.
+
+« Étapes de compression » explique les paquets sans créer de fichier. La
+compression avec sauvegarde affiche aussi les paquets effectivement écrits.
+« Décompresser / ouvrir » affiche chaque paquet lu, son en-tête, sa longueur et
+les pixels qu’il ajoute à l’image.
 
 ## Format RLE
 

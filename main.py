@@ -6,8 +6,15 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
-from image_file import load_compressed, load_image, save_compressed, save_image
-from rle_codec import CodecError
+from image_file import (
+    load_compressed_with_trace,
+    load_image,
+    load_png,
+    save_compressed_with_trace,
+    save_image,
+    save_png,
+)
+from rle_codec import CodecError, encode_with_trace
 
 CELL = 18
 MIN_SIDE = 1
@@ -42,8 +49,10 @@ class BinaryImageApp(tk.Tk):
         actions.pack(fill="x")
         tk.Button(actions, text="Ouvrir", command=self.open_file).pack(side="left", padx=(0, 5))
         tk.Button(actions, text="Enregistrer l’image", command=self.save_plain).pack(side="left", padx=5)
+        tk.Button(actions, text="Exporter PNG", command=self.save_png_file).pack(side="left", padx=5)
         tk.Button(actions, text="Compresser et enregistrer", command=self.save_rle).pack(side="left", padx=5)
         tk.Button(actions, text="Décompresser / ouvrir", command=self.open_rle).pack(side="left", padx=5)
+        tk.Button(actions, text="Étapes de compression", command=self.show_encode_steps).pack(side="left", padx=5)
 
         self.status = tk.StringVar()
         tk.Label(self, textvariable=self.status, anchor="w", padx=8, pady=6).pack(fill="x", side="bottom")
@@ -124,12 +133,17 @@ class BinaryImageApp(tk.Tk):
 
     def open_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="Ouvrir une image", filetypes=[("Image binaire", "*.bimg"), ("Tous les fichiers", "*.*")]
+            title="Ouvrir une image",
+            filetypes=[("Images prises en charge", "*.bimg *.png *.jpg *.jpeg *.bmp"), ("Tous les fichiers", "*.*")],
         )
         if not path:
             return
         try:
-            self._install_image(*load_image(path))
+            if path.lower().endswith(".bimg"):
+                image = load_image(path)
+            else:
+                image = load_png(path)
+            self._install_image(*image)
         except (OSError, CodecError, tk.TclError) as error:
             messagebox.showerror("Ouverture impossible", str(error))
 
@@ -140,15 +154,53 @@ class BinaryImageApp(tk.Tk):
         if not path:
             return
         try:
-            self._install_image(*load_compressed(path))
+            width, height, pixels, trace = load_compressed_with_trace(path)
+            self._install_image(width, height, pixels)
+            self._show_steps("Étapes de décompression RLE", trace)
         except (OSError, CodecError, tk.TclError) as error:
             messagebox.showerror("Décompression impossible", str(error))
 
     def save_plain(self) -> None:
         self._save(compressed=False)
 
+    def save_png_file(self) -> None:
+        try:
+            width, height = self._dimensions()
+        except (ValueError, tk.TclError) as error:
+            messagebox.showerror("Dimensions invalides", str(error))
+            return
+        path = filedialog.asksaveasfilename(
+            title="Exporter en PNG", defaultextension=".png",
+            filetypes=[("Image PNG", "*.png")],
+        )
+        if not path:
+            return
+        try:
+            save_png(path, width, height, bytes(self.pixels))
+        except (OSError, CodecError) as error:
+            messagebox.showerror("Export PNG impossible", str(error))
+
     def save_rle(self) -> None:
         self._save(compressed=True)
+
+    def show_encode_steps(self) -> None:
+        _, trace = encode_with_trace(bytes(self.pixels))
+        self._show_steps("Étapes de compression RLE", trace)
+
+    def _show_steps(self, title: str, trace: list[str]) -> None:
+        window = tk.Toplevel(self)
+        window.title(title)
+        window.geometry("760x520")
+        text = tk.Text(window, wrap="word", font=("TkFixedFont", 10))
+        scrollbar = tk.Scrollbar(window, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        text.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        width, height = self._dimensions()
+        text.insert("end", f"Image : {width} × {height} = {width * height} pixels\n")
+        text.insert("end", "Header packet : 16 bits = flag (1 bit) + count (15 bits).\n\n")
+        text.insert("end", "\n\n".join(trace) if trace else "Aucun pixel à coder.")
+        text.configure(state="disabled")
 
     def _save(self, compressed: bool) -> None:
         try:
@@ -165,10 +217,11 @@ class BinaryImageApp(tk.Tk):
             return
         try:
             if compressed:
-                save_compressed(path, width, height, bytes(self.pixels))
+                trace = save_compressed_with_trace(path, width, height, bytes(self.pixels))
                 packed_size = Path(path).stat().st_size
                 raw_size = 12 + len(self.pixels)
                 self.status.set(f"Image compressée : {packed_size} octets (original : {raw_size} octets)")
+                self._show_steps("Étapes de compression RLE", trace)
             else:
                 save_image(path, width, height, bytes(self.pixels))
                 self._update_status()
